@@ -1,6 +1,6 @@
-./pdfjs/build/pdf.mjs
-./pdfjs/build/pdf.mjs.map
-./pdfjs/build/pdf.sandbox.mjs
-./pdfjs/build/pdf.sandbox.mjs.map
-./pdfjs/build/pdf.worker.mjs
-./pdfjs/build/pdf.worker.mjs.map
+pdfjs/build/pdf.mjs
+pdfjs/build/pdf.mjs.map
+pdfjs/build/pdf.sandbox.mjs
+pdfjs/build/pdf.sandbox.mjs.map
+pdfjs/build/pdf.worker.mjs
+pdfjs/build/pdf.worker.mjs.map

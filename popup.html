@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Notion論文セーバー</title>
+  <meta charset="UTF-8">
+  <style>
+    body { font-family: sans-serif; width: 300px; padding: 10px; }
+    label { display: block; margin-top: 10px; }
+    input[type="text"], input[type="password"] { width: 95%; padding: 5px; margin-top: 5px;}
+    button { padding: 10px; margin-top: 15px; background-color: #007bff; color: white; border: none; cursor: pointer; }
+    button:hover { background-color: #0056b3; }
+    #status { margin-top: 10px; font-size: 0.9em; }
+  </style>
+</head>
+<body>
+  <h3>設定</h3>
+  <label for="notionApiKey">Notion API Key:</label>
+  <input type="password" id="notionApiKey">
+
+  <label for="notionDbId">Notion Database ID:</label>
+  <input type="text" id="notionDbId">
+
+  <label for="geminiApiKey">Gemini API Key:</label>
+  <input type="password" id="geminiApiKey">
+
+  <button id="saveSettings">設定を保存</button>
+  <hr>
+  <button id="saveToNotion">現在のページをNotionに保存</button>
+  <div id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>
