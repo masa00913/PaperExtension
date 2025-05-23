@@ -71,7 +71,7 @@ async function getSummaryFromGemini(textToSummarize) {
       // temperature: 0.7,
       // topK: 1,
       // topP: 1,
-      maxOutputTokens: 8192, // 必要に応じて調整
+      maxOutputTokens: 65536, // 必要に応じて調整
     }
   };
 
@@ -170,39 +170,6 @@ async function saveToNotion(pageDetails, summary) {
     });
   }
 
-  // 2. 抽出されたテキスト (pageDetails.pageText または pageDetails.abstract)
-  //    エラーメッセージの children[1] はこの部分に該当する可能性が高い
-  let contentForBody = "";
-  if (pageDetails.isPdf && pageDetails.pageText) { // PDFの場合は抽出テキスト
-      contentForBody = pageDetails.pageText;
-  } else if (pageDetails.abstract) { // HTMLでアブストラクトがあれば優先
-      contentForBody = pageDetails.abstract;
-  } else if (pageDetails.pageText) { // HTMLでアブストラクトがなければ全文
-      contentForBody = pageDetails.pageText;
-  }
-
-  if (contentForBody && contentForBody.trim() !== "") {
-    children.push({
-      object: 'block',
-      type: 'heading_2',
-      heading_2: {
-        rich_text: [{ type: 'text', text: { content: pageDetails.isPdf ? '抽出されたPDFテキスト' : (pageDetails.abstract ? '抄録' : 'ページ本文（抜粋）') } }]
-      }
-    });
-    // contentForBody を2000文字ごとに分割
-    const textChunks = splitTextIntoChunks(contentForBody.trim()); // content_scriptで既に15000文字に制限されているが、念のため
-    textChunks.forEach(chunk => {
-      children.push({
-        object: 'block',
-        type: 'paragraph',
-        paragraph: {
-          rich_text: [{ type: 'text', text: { content: chunk } }]
-        }
-      });
-    });
-  }
-
-
   // 3. 論文情報 (オプション)
   children.push({
     object: 'block',
@@ -231,7 +198,6 @@ async function saveToNotion(pageDetails, summary) {
 
   const notionPageData = {
     parent: { database_id: NOTION_DATABASE_ID },
-    icon: { type: "emoji", emoji: "📄" },
     properties: {
        // プライマリカラム
       'Name': { title: [{ text: { content: pageDetails.name || '' } }] },
@@ -266,16 +232,18 @@ async function saveToNotion(pageDetails, summary) {
         return { name: transformedName.substring(0, 99) };
         })
       } : null,
-      'Year': pageDetails.year ? { number: parseInt(pageDetails.year, 10) } : null,
-      'Journal': pageDetails.journal ? { select: { name: pageDetails.journal.split(',')[0].trim().substring(0, 99) } } : null,
-      'Type': pageDetails.type ? { select: { name: pageDetails.type.substring(0, 99) } } : null,
+      'Year': pageDetails.year ? { number: parseInt(pageDetails.year, 10) }: '',
+      'Journal':  { select: { name: pageDetails.journal ?pageDetails.journal.split(',')[0].trim().substring(0, 99) : null } },
+      'Type':  { select: { name: pageDetails.type ? pageDetails.type.substring(0, 99) : null} } ,
       
       'Citekey': { rich_text: [{ text: { content: pageDetails.citekey || '' } }] },
       'Edition': { rich_text: [{ text: { content: '' } }] }, // 仮に空で設定
-      'Volume': { rich_text: [{ text: { content: '' } }] }, // 仮に空で設定
-      'Pages': { rich_text: [{ text: { content: '' } }] },  // 仮に空で設定
+      'Volume': { rich_text: [{ text: { content: pageDetails.volume?pageDetails.volume:"" } }] }, // 仮に空で設定
+      'Pages': { rich_text: [{ text: { content: pageDetails.pages?pageDetails.pages:"" } }] },  // 仮に空で設定
       'info' : {checkbox: true}, // 追加の情報を保存するためのプロパティ (例: checkbox型)
       'created_at': { date: { start: new Date().toISOString() } }, // 作成日時 (現在の日時)
+      'Publisher' :  {select: {name: pageDetails.publisher ? pageDetails.publisher.substring(0, 99): ""}},
+
     },
     children: children
   };
@@ -308,86 +276,12 @@ async function saveToNotion(pageDetails, summary) {
   return await response.json();
 }
 
-const OFFSCREEN_DOCUMENT_PATH = 'offscreen.html';
-let creatingOffscreenPromise = null; // Offscreen Document作成中のPromiseを管理
+// PDF処理関連の関数と定数を削除
+// const OFFSCREEN_DOCUMENT_PATH = 'offscreen.html'; 
+// let creatingOffscreenPromise = null;
 
-// Offscreen Document が存在するか確認し、なければ作成する関数
-async function ensureOffscreenDocument() {
-    const path = chrome.runtime.getURL(OFFSCREEN_DOCUMENT_PATH);
-    const existingContexts = await chrome.runtime.getContexts({
-        contextTypes: ['OFFSCREEN_DOCUMENT'],
-        documentUrls: [path]
-    });
-
-    if (existingContexts.length > 0) {
-        console.log("Offscreen document already exists.");
-        return; // 既に存在する場合は何もしない
-    }
-
-    // 他の呼び出しが既に作成中の場合は、そのPromiseを待つ
-    if (creatingOffscreenPromise) {
-        console.log("Offscreen document creation already in progress, awaiting...");
-        return creatingOffscreenPromise;
-    }
-
-    console.log("Creating new Offscreen document...");
-    creatingOffscreenPromise = chrome.offscreen.createDocument({
-        url: OFFSCREEN_DOCUMENT_PATH,
-        reasons: [chrome.offscreen.Reason.BLOBS],
-        justification: 'Extract text from PDF for summarization and Notion saving',
-    }).then(async () => { // async を追加
-        console.log("Background: Offscreen document creation initiated.");
-        // ドキュメントがロードされ、スクリプトが実行されるまで少し長めに待つ
-        await new Promise(resolve => setTimeout(resolve, 1500)); // 500ms から 1500ms に変更 (またはそれ以上)
-        console.log("Background: Assumed offscreen document is ready after extended wait.");
-    }).catch(err => {
-        console.error("Error creating offscreen document:", err);
-        throw err; // エラーを再スロー
-    }).finally(() => {
-        creatingOffscreenPromise = null; // Promiseの管理をクリア
-    });
-
-    return creatingOffscreenPromise;
-}
-
-async function extractPdfTextViaOffscreen(pdfUrl) {
-  try {
-    await ensureOffscreenDocument();
-    console.log(`Background: Requesting PDF text extraction for: ${pdfUrl} after ensuring document.`);
-
-    const response = await chrome.runtime.sendMessage({
-      target: 'offscreen',
-      action: 'extractPdfText',
-      pdfUrl: pdfUrl,
-    });
-
-    if (!response) {
-        console.error(`Background: No response received from offscreen document for PDF: ${pdfUrl}. This might happen if the offscreen document crashed or closed prematurely.`);
-        return null;
-    }
-
-    if (response.error) {
-        // Offscreen documentからエラーが返された場合、そのエラーをログに出力
-        console.error(`Background: Error reported by offscreen document for PDF ${pdfUrl}: ${response.error}`);
-        return null;
-    }
-
-    if (!response.text || response.text.trim() === "") {
-        console.warn(`Background: Offscreen document returned no text or empty text for PDF: ${pdfUrl}. Offscreen response error field was: ${response.error || 'not set'}.`);
-        return null;
-    }
-
-    console.log(`Background: Successfully received text from offscreen. Length: ${response.text.length}`);
-    return response.text;
-
-  } catch (error) {
-    console.error(`Background: Exception in extractPdfTextViaOffscreen for URL ${pdfUrl}:`, error);
-    if (error.message && error.message.includes("Could not establish connection")) {
-        console.error("Background: Connection to offscreen document failed. It might not be running or an error occurred during its initialization. Check the Offscreen Document console.");
-    }
-    return null;
-  }
-}
+// async function ensureOffscreenDocument() { ... } // 削除
+// async function extractPdfTextViaOffscreen(pdfUrl) { ... } // 削除
 
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === "savePageToNotion") {
@@ -399,45 +293,24 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         }
 
         let pageDetails = await chrome.tabs.sendMessage(request.tabId, { action: "getPageDetails" });
-        if (!pageDetails) {
-            throw new Error("ページ情報の取得に失敗しました。");
+        if (!pageDetails || pageDetails.error) { // content_scriptからのエラーもチェック
+            throw new Error(pageDetails?.message || "ページ情報の取得に失敗しました。");
         }
-        console.log("Background: Received pageDetails:", JSON.stringify(pageDetails, null, 2)); // pageDetails全体をログ出力
+        console.log("Background: Received pageDetails:", JSON.stringify(pageDetails, null, 2));
 
-        let textToSummarize = pageDetails.pageText;
+        // PDF関連の処理を削除
+        let textToSummarize = pageDetails.pageText; // pageTextをそのまま使用
 
-        if (pageDetails.isPdf) {
-          console.log(`Background: PDF detected. URL to process: ${pageDetails.url}`);
-          // file:// URLも許可するように変更。ただし、Offscreen Documentからのアクセス成功は保証されない。
-          if (!pageDetails.url || (!pageDetails.url.startsWith('http:') && !pageDetails.url.startsWith('https:') && !pageDetails.url.startsWith('file:'))) {
-            console.error(`Background: Invalid PDF URL for offscreen processing: ${pageDetails.url}. Must be an http, https, or file URL.`);
-            throw new Error(`無効なPDF URLです: ${pageDetails.url}. http, https, または fileで始まる必要があります。`);
-          }
-          // ユーザーにファイルアクセス許可を促すメッセージを出すことも検討
-          if (pageDetails.url.startsWith('file:')) {
-              console.warn("Background: Attempting to process a local file URL. Ensure the extension has 'Allow access to file URLs' enabled.");
-              // ここでユーザーに通知を出すUIがあれば理想的
-          }
-
-          const pdfText = await extractPdfTextViaOffscreen(pageDetails.url);
-          if (pdfText && pdfText.trim() !== "") {
-            pageDetails.pageText = pdfText.substring(0, 15000);
-            console.log( "最初の100もじ"+ pageDetails.pageText.substring(0, 100));
-            textToSummarize = pdfText.substring(0, 8000);
-            console.log("PDF text extracted (first 100 chars):", pdfText.substring(0,100));
-          } else {
-            console.warn("Background: Failed to extract text from PDF or PDF text is empty. Check Offscreen Document console for details.");
-            // textToSummarize は空のままになる
-          }
-        }
-
+        // PDF固有の要約メッセージロジックを削除・修正
         let summary = "要約はスキップされました（対象テキストなし）。";
         if (textToSummarize && textToSummarize.trim().length > 10) {
             summary = await getSummaryFromGemini(textToSummarize);
-        } else if (pageDetails.isPdf && (!textToSummarize || textToSummarize.trim().length <=10)) {
-            summary = "PDFからテキストを抽出できませんでした、またはテキストが短すぎたため要約はスキップされました。詳細は拡張機能のコンソールを確認してください。";
+        } else if (!textToSummarize || textToSummarize.trim().length <=10) {
+            // PDF以外のケースも考慮した汎用的なメッセージに変更
+            summary = "ページからテキストを抽出できませんでした、またはテキストが短すぎたため要約はスキップされました。";
         }
-
+        console.log("Background: Summary generated:", summary);
+        // Notionに保存
         await saveToNotion(pageDetails, summary);
         sendResponse({ success: true });
       } catch (error) {
@@ -447,5 +320,6 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     })();
     return true;
   }
-  return true;
+  // 他のメッセージリスナーがある場合はそのまま残す
+  return true; // 非同期処理のためtrueを返す
 });

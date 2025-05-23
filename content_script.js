@@ -1,5 +1,5 @@
 // このスクリプトは閲覧ページ内で実行され、情報を抽出します。
-function getPageDetails() {
+async function getPageDetails() {
     let details = {
       title: document.title,
       url: window.location.href,
@@ -7,94 +7,140 @@ function getPageDetails() {
       authors: [],
       year: null,
       journal: null,
-      abstract: '',
-      pageText: '', // PDFの場合は background で抽出
-      isPdf: window.location.href.toLowerCase().endsWith('.pdf')
+      pageText: '', 
+      publisher: null,
+      volume: null,
+      pages: null,
+      issue: null,
+      message: '',
     };
-  
-    if (details.isPdf) {
-        details.type = 'pdf_document';
-        // PDFの場合、メタデータの多くは直接取得が困難。
-        // title は document.title から取得できる場合がある。
-        // name は title や URL から生成することを試みる。
-        const pdfFileName = details.url.substring(details.url.lastIndexOf('/') + 1).replace(/\.pdf$/i, '');
-        details.name = details.title || pdfFileName || "PDF Document";
 
-        // PDFのファイル名やタイトルから年を推測する試み（簡易的）
-        const yearMatchInTitle = (details.title.match(/\b(19|20)\d{2}\b/) || [])[0];
-        const yearMatchInFileName = (pdfFileName.match(/\b(19|20)\d{2}\b/) || [])[0];
-        details.year = yearMatchInTitle || yearMatchInFileName || null;
+    // 既存のDOI抽出ロジック
+    // arXivのDOIリンクからDOIを抽出する試み
+    const arxivDoiLink = document.getElementById('arxiv-doi-link');
+    if (arxivDoiLink && arxivDoiLink.href) {
+        const doiMatch = arxivDoiLink.href.match(/doi\.org\/(.*)/);
+        if (doiMatch && doiMatch[1]) {
+            details.doi = doiMatch[1];
+        }
+    }
 
-    } else {
-        // HTMLページの場合の既存のメタデータ抽出ロジック
+    // ACMのDOIメタタグからDOIを抽出する試み
+    if (!details.doi) {
+        const acmDoiMeta = document.querySelector('meta[name="dc.Identifier"][scheme="doi"]');
+        if (acmDoiMeta && acmDoiMeta.content) {
+            details.doi = acmDoiMeta.content;
+        }
+    }
+
+    // arXivやACMのDOIが見つからない場合、通常のメタタグを探す
+    if (!details.doi) {
         const doiMeta = document.querySelector('meta[name="citation_doi"]') ||
                         document.querySelector('meta[name="DOI"]');
         if (doiMeta) details.doi = doiMeta.content;
-  
-        document.querySelectorAll('meta[name="citation_author"]').forEach(meta => {
-          details.authors.push(meta.content);
-        });
-  
-        const yearMeta = document.querySelector('meta[name="citation_publication_date"]') ||
-                         document.querySelector('meta[name="citation_year"]');
-        if (yearMeta) {
-          const yearMatch = yearMeta.content.match(/\b\d{4}\b/);
-          if (yearMatch) details.year = yearMatch[0];
-        }
-  
-        const journalMeta = document.querySelector('meta[name="citation_journal_title"]');
-        if (journalMeta) details.journal = journalMeta.content;
-  
-        const abstractElement = document.querySelector('.abstract') || document.querySelector('[class*="Abstract" i]') || document.getElementById('abstract') || document.querySelector('[id*="abstract" i]');
-        if (abstractElement) details.abstract = abstractElement.innerText.trim().substring(0, 8000); // 少し長めに取得
-  
-        console.log("ページの文字数" + document.body.innerText.length)
-        details.pageText = document.body.innerText;
-  
-        if (details.journal) {
-          details.type = "article";
-        } else {
-          details.type = "misc";
+    }
+    
+    // HTMLページの場合
+    // まず本文を取得
+    details.pageText = document.body.innerText.replace(/\n/g, ''); // ページのテキストを取得し、改行を削除
+
+
+    if (details.doi) {
+        try {
+            const response = await fetch(`https://api.crossref.org/works/${details.doi}`);
+            if (response.ok) {
+                const data = await response.json();
+                const message = data.message;
+                if (message.title && message.title.length > 0) {
+                    details.title = message.title[0];
+                }
+                if (message.author && message.author.length > 0) {
+                    details.authors = message.author.map(auth => `${auth.given ? auth.given + ' ' : ''}${auth.family || ''}`.trim() || auth.name || '');
+                }
+                if (message.created && message.created['date-parts'] && message.created['date-parts'][0]) {
+                    details.year = message.created['date-parts'][0][0].toString();
+                }
+                if (message['container-title'] && message['container-title'].length > 0) {
+                    details.journal = message['container-title'][0];
+                    // ジャーナル名から括弧とその中身を削除
+                    if (details.journal) {
+                      details.journal = details.journal.replace(/\s*\(.*\)\s*$/, '').trim();
+                    }
+                }
+                if (message.publisher) {
+                    details.publisher = message.publisher;
+                }
+                if (message.volume) {
+                    details.volume = message.volume;
+                }
+                if (message.issue) {
+                    details.issue = message.issue;
+                }
+                if (message.page) {
+                    details.pages = message.page;
+                }
+                if(message.journal){
+                    details.journal = message.journal;
+                }
+                if(message.type){
+                    details.type = message.type;
+                }
+            }
+        } catch (error) {
+            console.error("Error fetching data from CrossRef:", error);
+            // CrossRefからの取得に失敗した場合、フォールバックとして一部情報をmetaタグから取得
         }
     }
-  
+
     // Name (筆頭著者 年 または タイトルから生成)
-    if (!details.isPdf && details.authors.length > 0 && details.year) {
-      const firstAuthorLastName = details.authors[0].split(',')[0].trim().split(' ').pop();
+    if (details.authors.length > 0 && details.year) {
+      const firstAuthorName = details.authors[0];
+      const firstAuthorLastName = firstAuthorName.includes(',') ? firstAuthorName.split(',')[0].trim().split(' ').pop() : firstAuthorName.split(' ').pop();
       details.name = `${firstAuthorLastName} ${details.year}`;
-      details.firstAuthor = details.authors[0];
+      details.firstAuthor = firstAuthorName;
+    } else if (details.title && details.year) {
+        details.name = `${details.title.substring(0,20)} ${details.year}`; // タイトルと年で名前を生成
+    } else if (details.title) {
+        details.name = details.title;
     } else if (details.year && !details.name) { // nameがまだ設定されていなければ
       details.name = `Unknown ${details.year}`;
-    } else if (!details.name) { // それでもnameがなければ
-        details.name = details.title ? details.title.substring(0, 50) : "Unknown Document";
+    } else if (!details.name) {
+      details.name = "Unknown Document";
     }
-    // PDFの場合のfirstAuthorは取得できないので設定しない
-    if (details.isPdf) {
-        details.firstAuthor = null;
-    } else if (details.authors.length > 0) {
+    // 著者名の整形
+    if(details.authors.length > 0) {
         details.firstAuthor = details.authors[0];
     }
 
 
     // Citekey
     if (details.firstAuthor && details.year && details.title) {
-        const firstAuthorLastName = details.firstAuthor.split(',')[0].trim().split(' ').pop() || "NoAuthor";
+        const firstAuthorName = details.firstAuthor;
+        const firstAuthorLastName = firstAuthorName.includes(',') ? firstAuthorName.split(',')[0].trim().split(' ').pop() : firstAuthorName.split(' ').pop() || "NoAuthor";
         const firstWordTitle = details.title.split(' ')[0].replace(/[^a-zA-Z0-9]/g, '') || "NoTitle";
         details.citekey = `${firstAuthorLastName}${details.year}${firstWordTitle}`;
-    } else if (details.name && details.name !== "Unknown Document" && details.name !== "PDF Document" && details.year) {
+    } else if (details.name && details.name !== "Unknown Document" && details.year) {
         details.citekey = `${details.name.replace(/[\s,.]/g, '').substring(0,15)}${details.year}`;
     } else {
         details.citekey = `Citekey${Date.now()}`;
     }
-  
+
     return details;
   }
   
   // バックグラウンドスクリプトからのリクエストに応じてページ情報を返す
   chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     if (request.action === "getPageDetails") {
-      const details = getPageDetails();
-      sendResponse(details);
+      getPageDetails().then(details => {
+        sendResponse(details);
+      }).catch(error => {
+        console.error("Error in content_script getPageDetails:", error);
+        sendResponse({ 
+          error: true, 
+          message: "Failed to retrieve page details from content_script: " + error.message 
+        });
+      });
+      return true; // 重要: sendResponse が非同期に呼び出されることを示します。
     }
-    return true; // 非同期でsendResponseを呼ぶ場合
+    // 他のメッセージタイプを処理する場合、それらも非同期であれば true を返すようにしてください。
   });
