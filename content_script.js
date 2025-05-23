@@ -7,37 +7,53 @@ async function getPageDetails() {
       authors: [],
       year: null,
       journal: null,
-      pageText: '', 
       publisher: null,
       volume: null,
       pages: null,
       issue: null,
       message: '',
+      arxivId: null, // arXiv IDを格納するフィールドを追加
+      arxivData: null, // arXivからのデータを格納するフィールドを追加
+      pageText: '',
     };
 
-    // 既存のDOI抽出ロジック
-    // arXivのDOIリンクからDOIを抽出する試み
-    const arxivDoiLink = document.getElementById('arxiv-doi-link');
-    if (arxivDoiLink && arxivDoiLink.href) {
-        const doiMatch = arxivDoiLink.href.match(/doi\.org\/(.*)/);
-        if (doiMatch && doiMatch[1]) {
-            details.doi = doiMatch[1];
+    // arXiv IDの抽出とArXiv APIからの情報取得を試みる
+    const baseHref = document.querySelector('base[href]');
+    if (baseHref && baseHref.href) {
+        const arxivIdMatch = baseHref.href.match(/arxiv\.org\/html\/([^\/]+)/i) || baseHref.href.match(/arxiv\.org\/abs\/([^\/]+)/i) || baseHref.href.match(/\/html\/([^\/]+)\/?$/i) || baseHref.href.match(/\/abs\/([^\/]+)\/?$/i);
+        if (arxivIdMatch && arxivIdMatch[1]) {
+            details.arxivId = arxivIdMatch[1].replace(/v\d+$/, ''); // バージョン情報を削除
+            details.doi = `10.48550/arXiv.${details.arxivId}`; // DOIを構築
+
         }
     }
 
-    // ACMのDOIメタタグからDOIを抽出する試み
-    if (!details.doi) {
-        const acmDoiMeta = document.querySelector('meta[name="dc.Identifier"][scheme="doi"]');
-        if (acmDoiMeta && acmDoiMeta.content) {
-            details.doi = acmDoiMeta.content;
-        }
-    }
 
-    // arXivやACMのDOIが見つからない場合、通常のメタタグを探す
-    if (!details.doi) {
-        const doiMeta = document.querySelector('meta[name="citation_doi"]') ||
-                        document.querySelector('meta[name="DOI"]');
-        if (doiMeta) details.doi = doiMeta.content;
+    // 既存のDOI抽出ロジック (arXiv IDが見つからなかった場合、またはArXiv APIからの情報取得に失敗した場合)
+    if (!details.doi || !details.title) { // DOIまたはタイトルがまだ取得できていない場合のみ実行
+        // arXivのDOIリンクからDOIを抽出する試み
+        const arxivDoiLink = document.getElementById('arxiv-doi-link');
+        if (arxivDoiLink && arxivDoiLink.href) {
+            const doiMatch = arxivDoiLink.href.match(/doi\.org\/(.*)/);
+            if (doiMatch && doiMatch[1]) {
+                details.doi = doiMatch[1];
+            }
+        }
+
+        // ACMのDOIメタタグからDOIを抽出する試み
+        if (!details.doi) {
+            const acmDoiMeta = document.querySelector('meta[name="dc.Identifier"][scheme="doi"]');
+            if (acmDoiMeta && acmDoiMeta.content) {
+                details.doi = acmDoiMeta.content;
+            }
+        }
+
+        // arXivやACMのDOIが見つからない場合、通常のメタタグを探す
+        if (!details.doi) {
+            const doiMeta = document.querySelector('meta[name="citation_doi"]') ||
+                            document.querySelector('meta[name="DOI"]');
+            if (doiMeta) details.doi = doiMeta.content;
+        }
     }
     
     // HTMLページの場合
@@ -45,52 +61,106 @@ async function getPageDetails() {
     details.pageText = document.body.innerText.replace(/\n/g, ''); // ページのテキストを取得し、改行を削除
 
 
-    if (details.doi) {
-        try {
-            const response = await fetch(`https://api.crossref.org/works/${details.doi}`);
-            if (response.ok) {
-                const data = await response.json();
-                const message = data.message;
-                if (message.title && message.title.length > 0) {
-                    details.title = message.title[0];
-                }
-                if (message.author && message.author.length > 0) {
-                    details.authors = message.author.map(auth => `${auth.given ? auth.given + ' ' : ''}${auth.family || ''}`.trim() || auth.name || '');
-                }
-                if (message.created && message.created['date-parts'] && message.created['date-parts'][0]) {
-                    details.year = message.created['date-parts'][0][0].toString();
-                }
-                if (message['container-title'] && message['container-title'].length > 0) {
-                    details.journal = message['container-title'][0];
-                    // ジャーナル名から括弧とその中身を削除
-                    if (details.journal) {
-                      details.journal = details.journal.replace(/\s*\(.*\)\s*$/, '').trim();
-                    }
-                }
-                if (message.publisher) {
-                    details.publisher = message.publisher;
-                }
-                if (message.volume) {
-                    details.volume = message.volume;
-                }
-                if (message.issue) {
-                    details.issue = message.issue;
-                }
-                if (message.page) {
-                    details.pages = message.page;
-                }
-                if(message.journal){
-                    details.journal = message.journal;
-                }
-                if(message.type){
-                    details.type = message.type;
-                }
-            }
-        } catch (error) {
-            console.error("Error fetching data from CrossRef:", error);
-            // CrossRefからの取得に失敗した場合、フォールバックとして一部情報をmetaタグから取得
+    if(details.arxivId){
+      
+        const baseUrl = 'https://export.arxiv.org/api/query'; // HTTPからHTTPSに変更
+        const query = `id_list=${details.arxivId}`; // DOI検索からArXiv ID直接検索に変更
+        const url = `${baseUrl}?${query}`;
+
+        try{
+          const response = await fetch(url);
+          if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+          }
+          const xmlText = await response.text();
+          const parser = new DOMParser();
+          const xmlDoc = parser.parseFromString(xmlText, "application/xml");
+          const entry = xmlDoc.querySelector("entry"); // Get the first entry
+
+          if (!entry) {
+            console.log("No paper found on arXiv for this DOI.");
+            return null;
+          }
+          const title = entry.querySelector("title").textContent.trim();
+          const published = entry.querySelector("published").textContent.trim();
+
+          const authors = [];
+          entry.querySelectorAll("author name").forEach(authorNode => {
+            authors.push(authorNode.textContent.trim());
+          });
+
+          if(title){
+            details.title = title;
+          }
+          if(published){
+            details.year = published.split('-')[0]; // 年を取得
+          }
+          if(authors.length > 0){
+            details.authors = authors;
+          }
+          details.publisher = "arXiv";
+          details.journal = "arXiv";
+          details.volume = null;
+          details.issue = null;
+          details.pages = null;
+          details.type = "arXiv";
+          
+        }catch(error){
+            console.error("Error fetching data from arXiv:", error);
+            details.arxivData = `Error: ${error.message}. URL: ${url}`; // エラーメッセージとURLを格納
         }
+    }else{
+      if (details.doi) {
+          try {
+
+            
+              const response = await fetch(`https://api.crossref.org/works/${details.doi}`);
+
+              if (response.ok) {
+                  const data = await response.json();
+                  const message = data.message;
+                  if (message.title && message.title.length > 0) {
+                      details.title = message.title[0];
+                  }
+                  if (message.author && message.author.length > 0) {
+                      details.authors = message.author.map(auth => `${auth.given ? auth.given + ' ' : ''}${auth.family || ''}`.trim() || auth.name || '');
+                  }
+                  if (message.created && message.created['date-parts'] && message.created['date-parts'][0]) {
+                      details.year = message.created['date-parts'][0][0].toString();
+                  }
+                  if (message['container-title'] && message['container-title'].length > 0) {
+                      details.journal = message['container-title'][0];
+                      // ジャーナル名から括弧とその中身を削除
+                      if (details.journal) {
+                        details.journal = details.journal.replace(/\s*\(.*\)\s*$/, '').trim();
+                      }
+                  }
+                  if (message.publisher) {
+                      details.publisher = message.publisher;
+                  }
+                  if (message.volume) {
+                      details.volume = message.volume;
+                  }
+                  if (message.issue) {
+                      details.issue = message.issue;
+                  }
+                  if (message.page) {
+                      details.pages = message.page;
+                  }
+                  if(message.journal){
+                      details.journal = message.journal;
+                  }
+                  if(message.type){
+                      details.type = message.type;
+                  }
+              }
+          } catch (error) {
+              console.error("Error fetching data from CrossRef:", error);
+              // CrossRefからの取得に失敗した場合、フォールバックとして一部情報をmetaタグから取得
+          }
+      }
     }
+    
 
     // Name (筆頭著者 年 または タイトルから生成)
     if (details.authors.length > 0 && details.year) {

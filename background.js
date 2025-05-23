@@ -233,8 +233,8 @@ async function saveToNotion(pageDetails, summary) {
         })
       } : null,
       'Year': pageDetails.year ? { number: parseInt(pageDetails.year, 10) }: '',
-      'Journal':  { select: { name: pageDetails.journal ?pageDetails.journal.split(',')[0].trim().substring(0, 99) : null } },
-      'Type':  { select: { name: pageDetails.type ? pageDetails.type.substring(0, 99) : null} } ,
+      'Journal':  { select: { name: pageDetails.journal ?pageDetails.journal.split(',')[0].trim().substring(0, 99) : "" } },
+      'Type':  { select: { name: pageDetails.type ? pageDetails.type.substring(0, 99) : ""} } ,
       
       'Citekey': { rich_text: [{ text: { content: pageDetails.citekey || '' } }] },
       'Edition': { rich_text: [{ text: { content: '' } }] }, // 仮に空で設定

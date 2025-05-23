@@ -12,7 +12,8 @@
     "host_permissions": [
       "https://api.notion.com/*",
       "https://generativelanguage.googleapis.com/*",
-      "file:///*" 
+      "http://export.arxiv.org/*",
+      "https://export.arxiv.org/*"
     ],
     "background": {
       "service_worker": "background.js"
