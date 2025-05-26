@@ -31,12 +31,40 @@ async function getPageDetails() {
 
     // 既存のDOI抽出ロジック (arXiv IDが見つからなかった場合、またはArXiv APIからの情報取得に失敗した場合)
     if (!details.doi || !details.title) { // DOIまたはタイトルがまだ取得できていない場合のみ実行
+        // IEEEのページからDOIを抽出する試み
+        if (window.location.hostname === 'ieeexplore.ieee.org') {
+            try {
+                const metadataScript = Array.from(document.scripts).find(script => script.textContent.includes('xplGlobal.document.metadata'));
+                if (metadataScript) {
+                    // スクリプトの内容からxplGlobal.document.metadataオブジェクトを抽出する
+                    // 注意: evalやnew Functionはセキュリティリスクがあるため、より安全な方法でパースすることを推奨しますが、
+                    // ここでは簡略化のため、文字列操作でDOIを試みます。
+                    // より堅牢な方法は、JSON.parseを安全に使うためにスクリプト内容を調整することです。
+                    const metadataText = metadataScript.textContent;
+                    const doiMatch = metadataText.match(/"doi"\s*:\s*"([^"]+)"/);
+                    if (doiMatch && doiMatch[1]) {
+                        details.doi = doiMatch[1];
+                    } else {
+                        // rightsLinkからContentIDを抽出する試み
+                        const rightsLinkMatch = metadataText.match(/rightsLink":"[^"]*ContentID=([^&"]+)/);
+                        if (rightsLinkMatch && rightsLinkMatch[1]) {
+                            details.doi = rightsLinkMatch[1];
+                        }
+                    }
+                }
+            } catch (e) {
+                console.error("Error extracting DOI from IEEE metadata:", e);
+            }
+        }
+
         // arXivのDOIリンクからDOIを抽出する試み
-        const arxivDoiLink = document.getElementById('arxiv-doi-link');
-        if (arxivDoiLink && arxivDoiLink.href) {
-            const doiMatch = arxivDoiLink.href.match(/doi\.org\/(.*)/);
-            if (doiMatch && doiMatch[1]) {
-                details.doi = doiMatch[1];
+        if (!details.doi) {
+            const arxivDoiLink = document.getElementById('arxiv-doi-link');
+            if (arxivDoiLink && arxivDoiLink.href) {
+                const doiMatch = arxivDoiLink.href.match(/doi\.org\/(.*)/);
+                if (doiMatch && doiMatch[1]) {
+                    details.doi = doiMatch[1];
+                }
             }
         }
 
@@ -55,7 +83,8 @@ async function getPageDetails() {
             if (doiMeta) details.doi = doiMeta.content;
         }
     }
-    
+
+
     // HTMLページの場合
     // まず本文を取得
     details.pageText = document.body.innerText.replace(/\n/g, ''); // ページのテキストを取得し、改行を削除
